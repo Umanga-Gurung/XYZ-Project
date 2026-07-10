@@ -1,0 +1,8 @@
+Django>=5.2
+djangorestframework>=3.16
+Pillow>=11.3
+whitenoise>=6.9
+django-admin-thumbnails>=0.2.9
+Faker>=36.0
+requests>=2.32
+django-esewa>=1.1.0
