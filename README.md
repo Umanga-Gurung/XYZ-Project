@@ -3,6 +3,10 @@
 
 We have used ``Faker`` to generate fake data automatically.
 
+## Test Creds 
+9806800005
+Nepal@123
+
 ## Getting Started  
 
 To get a local copy up and running follow these simple example steps.
