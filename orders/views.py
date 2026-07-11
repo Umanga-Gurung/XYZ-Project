@@ -109,7 +109,7 @@ class EsewaRequestView(View):
         success_url = request.build_absolute_uri(reverse("esewaverify"))
         failure_url = request.build_absolute_uri(reverse("checkout"))
 
-        total_amount = "{:.2f}".format(float(order.order_total))
+        total_amount = str(int(float(order.order_total)))
         transaction_uuid = str(order.order_number)
 
         esewa_pay = EsewaPayment(
@@ -118,10 +118,10 @@ class EsewaRequestView(View):
             failure_url=failure_url,
             secret_key=settings.ESEWA_SECRET_KEY,
             amount=total_amount,
-            tax_amount="0.00",
+            tax_amount="0",
             total_amount=total_amount,
-            product_service_charge="0.00",
-            product_delivery_charge="0.00",
+            product_service_charge="0",
+            product_delivery_charge="0",
             transaction_uuid=transaction_uuid
         )
         signature = esewa_pay.create_signature()
@@ -146,8 +146,6 @@ class EsewaRequestView(View):
 
 class EsewaVerifyView(View):
     def get(self, request, *args, **kwargs):
-        from django_esewa import EsewaPayment
-
         encoded_data = request.GET.get("data")
         if not encoded_data:
             messages.warning(request, "Invalid payment response. Please try again.")
@@ -176,16 +174,24 @@ class EsewaVerifyView(View):
             messages.warning(request, "Invalid product code in payment response.")
             return redirect("cart")
 
-        # Verify using EsewaPayment
+        # Verify signature manually (django_esewa's verify_signature has a bug:
+        # it compares response signature with request signature, but eSewa's
+        # response uses different signed fields, so the comparison always fails)
         try:
-            esewa_pay = EsewaPayment(
-                product_code=settings.ESEWA_PRODUCT_CODE,
-                secret_key=settings.ESEWA_SECRET_KEY,
-                total_amount=total_amount,
-                transaction_uuid=transaction_uuid
+            response_body_json = base64.b64decode(encoded_data).decode("utf-8")
+            verify_data = json.loads(response_body_json)
+            signed_field_names = verify_data.get("signed_field_names", "")
+            received_signature = verify_data.get("signature", "")
+            field_names = signed_field_names.split(",")
+            message = ",".join(
+                f"{field_name}={verify_data[field_name]}" for field_name in field_names
             )
-            esewa_pay.create_signature()
-            is_valid, _ = esewa_pay.verify_signature(encoded_data)
+            secret = settings.ESEWA_SECRET_KEY.encode("utf-8")
+            message_bytes = message.encode("utf-8")
+            hmac_sha256 = hmac.new(secret, message_bytes, hashlib.sha256)
+            digest = hmac_sha256.digest()
+            expected_signature = base64.b64encode(digest).decode("utf-8")
+            is_valid = received_signature == expected_signature
         except Exception:
             is_valid = False
 
@@ -217,9 +223,18 @@ class EsewaVerifyView(View):
             return redirect("cart")
 
         # Check transaction status on eSewa servers
-        is_sandbox = "rc.esewa.com.np" in settings.ESEWA_STATUS_CHECK_URL
         try:
-            status_completed = esewa_pay.is_completed(dev=is_sandbox)
+            status_url = settings.ESEWA_STATUS_CHECK_URL
+            status_response = requests.get(status_url, params={
+                "product_code": settings.ESEWA_PRODUCT_CODE,
+                "total_amount": total_amount,
+                "transaction_uuid": transaction_uuid,
+            })
+            if status_response.status_code != 200:
+                messages.warning(request, "Unable to verify payment status with eSewa.")
+                return redirect("cart")
+            status_data = status_response.json()
+            status_completed = status_data.get("status") == "COMPLETE"
         except Exception:
             messages.warning(request, "Unable to verify payment status with eSewa.")
             return redirect("cart")
